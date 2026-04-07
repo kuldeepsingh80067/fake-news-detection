@@ -1,10 +1,9 @@
 # ==========================================
-# 📰 Fake News Detection PRO App
+# 📰 Fake News Detection PRO (10/10 Version)
 # Author: Kuldeep Singh
 # ==========================================
 
 import streamlit as st
-import pandas as pd
 import numpy as np
 import re
 import string
@@ -12,96 +11,72 @@ import pickle
 import requests
 from bs4 import BeautifulSoup
 from PIL import Image
-import easyocr
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
+# OPTIONAL OCR (safe import)
+try:
+    import easyocr
+    reader = easyocr.Reader(['en'], gpu=False)
+except:
+    reader = None
+
+# ==========================================
+# ⚙️ PAGE CONFIG
+# ==========================================
+st.set_page_config(page_title="Fake News Detector PRO", page_icon="📰")
 
 # ==========================================
 # 🧹 TEXT CLEANING
 # ==========================================
 def clean_text(text):
     text = text.lower()
-    text = re.sub(r'\[.*?\]', '', text)
-    text = re.sub(r'http\S+', '', text)
-    text = re.sub(r'<.*?>+', '', text)
-    text = re.sub(r'[%s]' % re.escape(string.punctuation), '', text)
-    text = re.sub(r'\n', ' ', text)
-    text = re.sub(r'\w*\d\w*', '', text)
-    return text
-
+    text = re.sub(r"http\S+", "", text)
+    text = re.sub(r"\d+", "", text)
+    text = re.sub(r"[^\w\s]", "", text)
+    return text.strip()
 
 # ==========================================
-# 🌐 EXTRACT TEXT FROM URL
+# 🌐 URL TEXT EXTRACTION
 # ==========================================
 def get_text_from_url(url):
     try:
-        response = requests.get(url)
-        soup = BeautifulSoup(response.text, "html.parser")
-        paragraphs = [p.text for p in soup.find_all("p")]
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=5)
+        soup = BeautifulSoup(response.content, "html.parser")
+        paragraphs = [p.get_text() for p in soup.find_all("p")]
         return " ".join(paragraphs)
     except:
         return ""
 
-
 # ==========================================
-# 🖼️ OCR FROM IMAGE
+# 🖼️ IMAGE OCR
 # ==========================================
-reader = easyocr.Reader(['en'])
-
 def extract_text_from_image(image):
-    result = reader.readtext(np.array(image))
-    text = " ".join([res[1] for res in result])
-    return text
-
+    if reader is None:
+        return ""
+    try:
+        result = reader.readtext(np.array(image))
+        return " ".join([r[1] for r in result])
+    except:
+        return ""
 
 # ==========================================
-# 🤖 LOAD / TRAIN MODEL
+# 🤖 LOAD MODEL
 # ==========================================
 @st.cache_resource
 def load_model():
     try:
         model = pickle.load(open("model.pkl", "rb"))
         vectorizer = pickle.load(open("vectorizer.pkl", "rb"))
+        return model, vectorizer
     except:
-        data = {
-            "text": [
-                "Government releases official economic report",
-                "Scientists confirm climate change effects",
-                "Breaking news: major policy announced",
-                "Click here to earn money instantly!!!",
-                "Miracle cure discovered doctors hate it",
-                "Shocking secret revealed you won't believe",
-                "NASA launches new satellite successfully",
-                "Fake celebrity news goes viral online"
-            ],
-            "label": [1,1,1,0,0,0,1,0]
-        }
-
-        df = pd.DataFrame(data)
-        df["text"] = df["text"].apply(clean_text)
-
-        vectorizer = TfidfVectorizer(max_features=5000)
-        X = vectorizer.fit_transform(df["text"])
-        y = df["label"]
-
-        model = LogisticRegression()
-        model.fit(X, y)
-
-        pickle.dump(model, open("model.pkl", "wb"))
-        pickle.dump(vectorizer, open("vectorizer.pkl", "wb"))
-
-    return model, vectorizer
-
+        st.error("❌ Model files not found! Upload model.pkl & vectorizer.pkl")
+        st.stop()
 
 model, vectorizer = load_model()
 
 # ==========================================
 # 🎨 UI
 # ==========================================
-st.set_page_config(page_title="Fake News Detector PRO", page_icon="📰")
-
-# Sidebar (🔥 Professional Touch)
 st.sidebar.title("👨‍💻 About")
 st.sidebar.markdown("""
 **Developer:** Kuldeep Singh  
@@ -123,44 +98,55 @@ if option == "Text":
 elif option == "URL":
     url = st.text_input("Enter News URL")
     if url:
-        news_text = get_text_from_url(url)
-        st.success("✅ Text extracted from URL")
+        with st.spinner("Extracting content..."):
+            news_text = get_text_from_url(url)
+        if news_text:
+            st.success("✅ Content extracted")
+        else:
+            st.error("❌ Failed to extract content")
 
 # IMAGE INPUT
 elif option == "Image":
-    image_file = st.file_uploader("Upload News Image", type=["jpg", "png", "jpeg"])
-    if image_file:
-        image = Image.open(image_file)
+    file = st.file_uploader("Upload Image", type=["jpg", "png", "jpeg"])
+    if file:
+        image = Image.open(file)
         st.image(image, caption="Uploaded Image", use_column_width=True)
-        news_text = extract_text_from_image(image)
-        st.success("✅ Text extracted from Image")
+        with st.spinner("Reading text from image..."):
+            news_text = extract_text_from_image(image)
+        if news_text:
+            st.success("✅ Text extracted from image")
+        else:
+            st.warning("⚠️ Could not detect text")
 
 # ==========================================
 # 🔍 PREDICTION
 # ==========================================
-if st.button("Analyze News"):
-    if news_text.strip() == "":
-        st.warning("⚠️ Please provide input")
+if st.button("🔍 Analyze News"):
+    if not news_text.strip():
+        st.warning("⚠️ Please provide valid input")
     else:
-        cleaned = clean_text(news_text)
-        vectorized = vectorizer.transform([cleaned])
+        with st.spinner("Analyzing..."):
+            cleaned = clean_text(news_text)
+            vectorized = vectorizer.transform([cleaned])
 
-        prediction = model.predict(vectorized)[0]
-        confidence = model.predict_proba(vectorized).max()
+            prediction = model.predict(vectorized)[0]
+            proba = model.predict_proba(vectorized)[0]
+            confidence = np.max(proba)
 
         st.subheader("📊 Result")
 
         if prediction == 1:
-            st.success("✅ Real News")
+            st.success(f"✅ Real News ({confidence*100:.2f}% confidence)")
         else:
-            st.error("❌ Fake News")
+            st.error(f"❌ Fake News ({confidence*100:.2f}% confidence)")
 
-        st.write(f"Confidence: {confidence*100:.2f}%")
+        # Insight
+        if confidence < 0.6:
+            st.warning("⚠️ Low confidence prediction — result may not be reliable")
 
-        if "click" in news_text.lower() or "shocking" in news_text.lower():
-            st.info("⚠️ This news contains sensational words, often used in fake news.")
-
-# Footer (🔥 Branding)
+# ==========================================
+# 📌 FOOTER
+# ==========================================
 st.markdown("---")
 st.markdown("### 👨‍💻 Developed by Kuldeep Singh")
 st.caption("Built with ❤️ using AI, NLP & Streamlit")
